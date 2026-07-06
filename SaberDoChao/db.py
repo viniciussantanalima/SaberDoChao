@@ -3,7 +3,7 @@ import os
 import tempfile
 from typing import List, Dict, Optional
 
-from functions import obter_caminho_csv
+from functions import obter_caminho_csv, normalizar_linha_csv
 
 # CSV header used by the app
 HEADERS = [
@@ -35,12 +35,10 @@ def ensure_csv_exists() -> None:
     path = get_csv_path()
     dirpath = os.path.dirname(path)
     os.makedirs(dirpath, exist_ok=True)
-    # If file missing or very small, try to seed from dados_iniciais if available
     if not os.path.exists(path) or os.path.getsize(path) < 200:
         try:
             from dados_iniciais import CSV_FABRICA
             with open(path, "w", encoding="utf-8", newline="") as f:
-                # CSV_FABRICA already contains header+rows
                 f.write(CSV_FABRICA.strip() + "\n")
             return
         except Exception:
@@ -55,10 +53,10 @@ def read_all_plants() -> List[Dict[str, str]]:
     ensure_csv_exists()
     rows: List[Dict[str, str]] = []
     try:
-        with open(path, mode="r", encoding="utf-8", newline="") as f:
+        with open(path, mode="r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f, delimiter=";")
             for r in reader:
-                rows.append({k: (v if v is not None else "") for k, v in r.items()})
+                rows.append(normalizar_linha_csv(r))
     except FileNotFoundError:
         pass
     return rows

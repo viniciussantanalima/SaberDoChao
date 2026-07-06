@@ -6,10 +6,29 @@ import csv
 from datetime import datetime
 import os
 import tempfile
-import re  # <--- ADICIONE ESTA LINHA AQUI
+import re
+
+
+def normalizar_linha_csv(linha: dict) -> dict:
+    if not linha:
+        return {}
+    normalized: dict = {}
+    for k, v in linha.items():
+        if k is None:
+            continue
+        chave = str(k).strip().lstrip('\ufeff')
+        normalized[chave] = "" if v is None else str(v)
+    return normalized
+
+
+def abrir_csv_com_dicionarios(caminho: str):
+    with open(caminho, mode='r', encoding='utf-8-sig', newline='') as arquivo:
+        reader = csv.DictReader(arquivo, delimiter=';')
+        for linha in reader:
+            yield normalizar_linha_csv(linha)
+
 
 def obter_pasta_segura():
-    # Use o diretório interno do app sempre que disponível.
     pasta = os.environ.get("FLET_APP_STORAGE_DATA")
     if pasta:
         pasta = os.path.abspath(pasta)
@@ -64,7 +83,6 @@ def criar_canteiro(
 
     caminho_csv = obter_caminho_csv()
 
-    # Garante que o CSV existe antes de ler plantas_db_local
     if not os.path.exists(caminho_csv) or os.path.getsize(caminho_csv) < 200:
         try:
             from dados_iniciais import CSV_FABRICA
@@ -136,55 +154,91 @@ def criar_canteiro(
 
         def interpretar_sazonalidade(texto):
             texto = str(texto).lower()
-            # Mapeia as variações e erros comuns para o número do mês
             mapa_meses = {
-                1: ['jan'], 2: ['fev'], 3: ['mar'], 4: ['abr', 'abriu'], 
-                5: ['mai'], 6: ['jun'], 7: ['jul'], 8: ['ago'], 
-                9: ['set'], 10: ['out', 'otu'], 11: ['nov'], 12: ['dez']
+                1: ['jan', 'janeiro'],
+                2: ['fev', 'fevereiro'],
+                3: ['mar', 'marco', 'março'],
+                4: ['abr', 'abril', 'abriu'],
+                5: ['mai', 'maio'],
+                6: ['jun', 'junho'],
+                7: ['jul', 'julho'],
+                8: ['ago', 'agosto'],
+                9: ['set', 'setembro'],
+                10: ['out', 'outubro', 'otu'],
+                11: ['nov', 'novembro'],
+                12: ['dez', 'dezembro'],
             }
-            
+
             meses_encontrados = []
             for num_mes, variaveis in mapa_meses.items():
                 for var in variaveis:
-                    # Busca a variação como início de palavra, ignorando o resto
-                    para_buscar = r'\b' + var + r'[a-z]*\b'
+                    para_buscar = r'\b' + re.escape(var) + r'[a-záéíóúç]*\b'
                     for match in re.finditer(para_buscar, texto):
                         meses_encontrados.append((match.start(), num_mes))
-                        
+
             if meses_encontrados:
-                # Ordena pela posição onde a palavra apareceu na frase (quem vem primeiro)
-                meses_encontrados.sort() 
+                meses_encontrados.sort()
                 inicio = meses_encontrados[0][1]
                 fim = meses_encontrados[-1][1]
                 return (inicio, fim)
             return None
 
-        # Decide se é Cronológico (Dias) ou Sazonal (Meses)
+        def interpretar_colheita(texto):
+            texto_limpo = str(texto).strip().lower()
+            if not texto_limpo:
+                return None, None
+
+            padrao_meses = re.fullmatch(r"\s*(0[1-9]|1[0-2])\s*(?:-|:|;|/|a|à|até|ate)\s*(0[1-9]|1[0-2])\s*", texto_limpo)
+            if padrao_meses:
+                inicio = int(padrao_meses.group(1))
+                fim = int(padrao_meses.group(2))
+                if 1 <= inicio <= 12 and 1 <= fim <= 12:
+                    return None, (inicio, fim)
+                return None, None
+
+            padrao_intervalo_dias = re.fullmatch(r"\s*(\d+)\s*(?:-|:|;|/|a|à|até|ate)\s*(\d+)\s*(dias?)?\s*", texto_limpo)
+            if padrao_intervalo_dias:
+                inicio = int(padrao_intervalo_dias.group(1))
+                fim = int(padrao_intervalo_dias.group(2))
+                if 'dias' in texto_limpo:
+                    return int((inicio + fim) / 2), None
+                if 1 <= inicio <= 12 and 1 <= fim <= 12:
+                    return None, (inicio, fim)
+                return int((inicio + fim) / 2), None
+
+            padrao_dias = re.fullmatch(r"\s*(\d+)\s*dias?\s*", texto_limpo)
+            if padrao_dias:
+                return int(padrao_dias.group(1)), None
+
+            padrao_numero = re.fullmatch(r"\s*(\d+)\s*", texto_limpo)
+            if padrao_numero:
+                return int(padrao_numero.group(1)), None
+
+            periodo_sazonal = interpretar_sazonalidade(texto_limpo)
+            if periodo_sazonal:
+                return None, periodo_sazonal
+
+            return None, None
+
         dias_colheita = None
         periodo_sazonal = None
         
         texto_colheita = str(colheita_info).strip()
-        if texto_colheita.isdigit():
-            dias_colheita = int(texto_colheita)
-        else:
-            periodo_sazonal = interpretar_sazonalidade(texto_colheita)
-            # Se o utilizador escreveu algo ilegível e não é número, assume 90 dias
-            if not periodo_sazonal:
-                dias_colheita = 90
+        dias_colheita, periodo_sazonal = interpretar_colheita(texto_colheita)
+        if dias_colheita is None and periodo_sazonal is None:
+            dias_colheita = 90
 
         try:
+            hoje = datetime.today()
             data_plantio = datetime.strptime(data_plantio_str, "%d/%m/%Y")
-            dias_passados = (datetime.today() - data_plantio).days
+            dias_passados = (hoje - data_plantio).days
             
-            # Evita divisão por zero se freq_rega for 0
             precisa_regar = (dias_passados >= 0) and (freq_rega > 0 and dias_passados % freq_rega == 0)
 
-            # LÓGICA DE ÁRVORES E SAZONALIDADE
             if periodo_sazonal:
                 inicio, fim = periodo_sazonal
-                mes_atual = datetime.today().month
+                mes_atual = hoje.month
                 
-                # Verifica se está no período (suporta virada de ano, ex: Nov a Fev)
                 if inicio <= fim:
                     dentro_da_epoca = inicio <= mes_atual <= fim
                 else:
@@ -192,13 +246,17 @@ def criar_canteiro(
 
                 if dentro_da_epoca:
                     cor_fundo = ft.Colors.GREEN_100
-                    status_texto = "Período Ativo (Época de Frutos/Colheita)"
+                    status_texto = "Frutificando"
                 else:
+                    data_inicio_periodo = datetime(hoje.year, inicio, 1)
+                    if data_inicio_periodo <= hoje:
+                        data_inicio_periodo = datetime(hoje.year + 1, inicio, 1)
+
+                    dias_restantes = (data_inicio_periodo.date() - hoje.date()).days
                     cor_fundo = ft.Colors.GREY_300
                     cor_texto = ft.Colors.GREY_800
-                    status_texto = "Fora de época de produção"
+                    status_texto = f"Começa em {dias_restantes} dias"
                     
-            # LÓGICA DE HORTALIÇAS (DIAS)
             elif dias_colheita is not None:
                 dias_restantes = dias_colheita - dias_passados
                 
@@ -270,24 +328,23 @@ def criar_canteiro(
 
     plantas_db_local = {}
     try:
-        with open(caminho_csv, mode='r', encoding='utf-8') as arquivo:
-            for linha in csv.DictReader(arquivo, delimiter=';'):
-                nome_csv = linha.get('Nome da Planta')
-                if nome_csv and nome_csv.strip() != "":
-                    dias = str(linha.get('Tempo de Colheita (Em Dias)', '90')).strip()
-                    rega = str(linha.get('Frequência de Rega (Em Dias)', '1')).strip()
-                    
-                    valor_sol = linha.get('Quantidade de Sol')
-                    if valor_sol is None:
-                        sol_valor = 'Pleno Sol'
-                    else:
-                        sol_valor = str(valor_sol).strip()
-                    
-                    plantas_db_local[nome_csv.strip()] = {
-                        'colheita': dias,
-                        'rega': int(rega) if rega.isdigit() else 1,
-                        'sol': sol_valor
-                    }
+        for linha in abrir_csv_com_dicionarios(caminho_csv):
+            nome_csv = linha.get('Nome da Planta')
+            if nome_csv and nome_csv.strip() != "":
+                dias = str(linha.get('Tempo de Colheita (Em Dias)', '90')).strip()
+                rega = str(linha.get('Frequência de Rega (Em Dias)', '1')).strip()
+                
+                valor_sol = linha.get('Quantidade de Sol')
+                if valor_sol is None:
+                    sol_valor = 'Pleno Sol'
+                else:
+                    sol_valor = str(valor_sol).strip()
+                
+                plantas_db_local[nome_csv.strip()] = {
+                    'colheita': dias,
+                    'rega': int(rega) if rega.isdigit() else 1,
+                    'sol': sol_valor
+                }
     except FileNotFoundError:
         pass
 
@@ -308,7 +365,6 @@ def criar_canteiro(
 
         caminho_csv = obter_caminho_csv()
 
-        # Garante que o CSV existe antes de listar plantas disponíveis
         if not os.path.exists(caminho_csv) or os.path.getsize(caminho_csv) < 200:
             try:
                 from dados_iniciais import CSV_FABRICA
@@ -321,21 +377,20 @@ def criar_canteiro(
         plantas_db = {}
         opcoes = []
         try:
-            with open(caminho_csv, mode='r', encoding='utf-8') as arquivo:
-                for linha in csv.DictReader(arquivo, delimiter=';'):
-                    nome = linha.get('Nome da Planta')
-                    if nome and nome.strip() != "":
-                        nome = nome.strip()
-                        dias = str(linha.get('Tempo de Colheita (Em Dias)', '90')).strip()
-                        rega = str(linha.get('Frequência de Rega (Em Dias)', '1')).strip()
-                        pops = [str(linha.get(f'Nome Popular {i}', '')).strip() for i in range(1, 4)]
-                        pops = [p for p in pops if p]
-                        plantas_db[nome] = {
-                            'colheita': int(dias) if dias.isdigit() else 90,
-                            'rega': int(rega) if rega.isdigit() else 1,
-                            'populares': pops,
-                        }
-                        opcoes.append(ft.dropdown.Option(nome))
+            for linha in abrir_csv_com_dicionarios(caminho_csv):
+                nome = linha.get('Nome da Planta')
+                if nome and nome.strip() != "":
+                    nome = nome.strip()
+                    dias = str(linha.get('Tempo de Colheita (Em Dias)', '90')).strip()
+                    rega = str(linha.get('Frequência de Rega (Em Dias)', '1')).strip()
+                    pops = [str(linha.get(f'Nome Popular {i}', '')).strip() for i in range(1, 4)]
+                    pops = [p for p in pops if p]
+                    plantas_db[nome] = {
+                        'colheita': dias,
+                        'rega': int(rega) if rega.isdigit() else 1,
+                        'populares': pops,
+                    }
+                    opcoes.append(ft.dropdown.Option(nome))
         except FileNotFoundError:
             pass
 
@@ -556,8 +611,7 @@ def criar_canteiro(
     return cartao_visual
 
 
-def gerar_lista_saberes(page=None, painel_info=None):
-    # Use db module to read plants (ensures initial data is applied)
+def gerar_lista_saberes(page=None, painel_info=None, on_planta_alterada=None):
     try:
         from db import read_all_plants
     except Exception:
@@ -583,7 +637,7 @@ def gerar_lista_saberes(page=None, painel_info=None):
                 def fazer_clique(dados_planta):
                     def on_click(e):
                         if page and painel_info:
-                            abrir_info_planta(page, painel_info, dados_planta)
+                            abrir_info_planta(page, painel_info, dados_planta, on_after_delete=on_planta_alterada)
                     return on_click
 
                 cartao = ft.Card(
@@ -616,24 +670,44 @@ def gerar_lista_saberes(page=None, painel_info=None):
         
     return lista_visual
 
-def abrir_info_planta(page, painel_info, dados):
+def abrir_info_planta(page, painel_info, dados, on_after_delete=None):
     def fechar(e):
         painel_info.visible = False
         page.update()
 
-    # Filtra os nomes populares, limpando espaços em branco
+    def remover_planta(e):
+        try:
+            import db
+            nome_planta = str(dados.get('Nome da Planta', '')).strip()
+            if not nome_planta:
+                return
+
+            sucesso = db.delete_plant(nome_planta)
+            if sucesso:
+                if on_after_delete:
+                    on_after_delete()
+                painel_info.visible = False
+                page.snack_bar = ft.SnackBar(ft.Text("Planta removida da lista."))
+                page.snack_bar.open = True
+                page.update()
+            else:
+                page.snack_bar = ft.SnackBar(ft.Text("Não foi possível remover esta planta."))
+                page.snack_bar.open = True
+                page.update()
+        except Exception as erro:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Erro ao remover planta: {erro}"))
+            page.snack_bar.open = True
+            page.update()
+
     nomes_populares = [dados.get(f'Nome Popular {i}', '') for i in range(1, 4)]
     nomes_populares = [n.strip() for n in nomes_populares if n.strip()]
 
-    # Filtra as plantas companheiras
     bem = [dados.get(f'Planta que Cresce Bem Junto {i}', '') for i in range(1, 4)]
     bem = [b.strip() for b in bem if b.strip()]
 
-    # Filtra as plantas antagônicas
     mal = [dados.get(f'Planta que Cresce Mal Junto {i}', '') for i in range(1, 4)]
     mal = [m.strip() for m in mal if m.strip()]
 
-    # Tenta 'Fonte' (plantas do usuário) e depois 'Fonte 1/2/3' (plantas de fábrica)
     fontes_lista = []
     fonte_simples = dados.get('Fonte', '').strip()
     if fonte_simples:
@@ -644,8 +718,9 @@ def abrir_info_planta(page, painel_info, dados):
             if f:
                 fontes_lista.append(f)
     fontes_texto = '; '.join(fontes_lista) if fontes_lista else ''
+    fontes_norm = [str(f).strip().lower() for f in fontes_lista if str(f).strip()]
+    eh_planta_usuario = any(f in {"usuário", "usuario", "user", "user-generated"} for f in fontes_norm)
 
-    # --- 1. Lógica Inteligente para Colheita e Rega ---
     val_colheita = str(dados.get('Tempo de Colheita (Em Dias)', '')).strip()
     if val_colheita.isdigit():
         texto_colheita = f"{val_colheita} dias"
@@ -662,9 +737,7 @@ def abrir_info_planta(page, painel_info, dados):
         
     val_sol = str(dados.get('Quantidade de Sol', '')).strip()
 
-    # --- 2. Ocultação de Campos Vazios ---
     def linha_info(rotulo, valor):
-        # Se estiver vazio ou for explicitamente "N/A", não constrói a linha
         if not valor or str(valor).strip() == '' or str(valor).strip().upper() == 'N/A':
             return None
             
@@ -674,7 +747,6 @@ def abrir_info_planta(page, painel_info, dados):
             ft.Divider(height=1),
         ], spacing=2)
 
-    # Monta todos os blocos e remove os "None" da lista final
     todas_as_linhas = [
         linha_info("Categoria", dados.get('Tipo', '')),
         linha_info("Nomes Populares", ", ".join(nomes_populares)),
@@ -688,15 +760,22 @@ def abrir_info_planta(page, painel_info, dados):
     
     linhas_visiveis = [linha for linha in todas_as_linhas if linha is not None]
 
-    # --- 3. Tamanho da Caixa Dinâmico ---
-    # Multiplica a quantidade de linhas por ~55 pixels, limitando a um máximo de 400 pixels
     altura_calculada = min(len(linhas_visiveis) * 55, 400)
+
+    controles_header = [ft.IconButton(ft.Icons.CLOSE, on_click=fechar)]
+    if eh_planta_usuario:
+        controles_header.insert(0, ft.TextButton(
+            "Remover",
+            icon=ft.Icons.DELETE_OUTLINE,
+            on_click=remover_planta,
+            style=ft.ButtonStyle(color=ft.Colors.RED_700),
+        ))
 
     painel_info.content = ft.Column(
         controls=[
             ft.Row([
                 ft.Text(dados.get('Nome da Planta', ''), size=20, weight=ft.FontWeight.BOLD),
-                ft.IconButton(ft.Icons.CLOSE, on_click=fechar),
+                ft.Row(controles_header, alignment=ft.MainAxisAlignment.END),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             
             ft.Column(
@@ -705,7 +784,7 @@ def abrir_info_planta(page, painel_info, dados):
                 controls=linhas_visiveis
             ),
         ],
-        tight=True  # Garante que a coluna principal abrace o tamanho do conteúdo e não deixe espaços mortos
+        tight=True
     )
     
     painel_info.visible = True
