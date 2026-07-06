@@ -4,16 +4,16 @@ import traceback
 import flet as ft
 
 try:
-    # === IMPORTAÇÕES BLINDADAS ===
     import os
     import shutil
     import platform
     import csv
     import json
+    import tempfile
     import db
     from typing import List, cast
 
-    from functions import criar_canteiro, reordenar_canteiros, gerar_lista_saberes, abrir_info_planta, obter_caminho_csv
+    from functions import criar_canteiro, reordenar_canteiros, gerar_lista_saberes, abrir_info_planta, obter_caminho_csv, normalizar_linha_csv, abrir_csv_com_dicionarios
     from dados_iniciais import CSV_FABRICA  
 
     def main(page: ft.Page):
@@ -69,20 +69,20 @@ try:
                 ),
             )
 
-            def compartilhar_dados(e):
+            def coletar_dados_exportacao():
                 dados_exportacao = {"plantas_usuario": [], "canteiros": []}
 
-                # 1. Resgata plantas do usuário
                 try:
-                    with open(caminho_csv_trabalho, mode='r', encoding='utf-8') as arquivo:
-                        for linha in csv.DictReader(arquivo, delimiter=';'):
-                            fonte = linha.get('Fonte 1') or linha.get('Fonte', '')
-                            if fonte and str(fonte).strip() == "Usuário":
-                                dados_exportacao["plantas_usuario"].append(dict(linha))
+                    with open(caminho_csv_trabalho, mode='r', encoding='utf-8-sig', newline='') as arquivo:
+                        reader = csv.DictReader(arquivo, delimiter=';')
+                        for linha in reader:
+                            normalized = {str(k).strip().lstrip('\ufeff'): (v if v is not None else "") for k, v in linha.items() if k is not None}
+                            fonte = normalized.get('Fonte 1') or normalized.get('Fonte', '')
+                            if fonte and str(fonte).strip().lower() in {"usuário", "usuario"}:
+                                dados_exportacao["plantas_usuario"].append(normalized)
                 except Exception:
                     pass
 
-                # 2. Resgata os canteiros
                 for canteiro in coluna_canteiros.controls:
                     if hasattr(canteiro, 'data') and isinstance(canteiro.data, dict) and "nome" in canteiro.data:
                         dados_exportacao["canteiros"].append({
@@ -90,24 +90,53 @@ try:
                             "plantas": canteiro.data["plantas"]
                         })
 
-                json_texto = json.dumps(dados_exportacao, ensure_ascii=False, indent=4)
+                return dados_exportacao
 
-                # 3. Salva no mesmo diretório universal do plantas.csv
-                pasta_base = os.path.dirname(caminho_csv_trabalho)
-                caminho_arquivo = os.path.join(pasta_base, "saberes_compartilhados.json")
-                
-                try:
-                    with open(caminho_arquivo, "w", encoding="utf-8") as f:
-                        f.write(json_texto)
-                    aviso = f"✓ Arquivo salvo internamente! {len(dados_exportacao['canteiros'])} canteiro(s) exportados."
-                except Exception as erro:
-                    aviso = f"⚠ Erro ao salvar: {erro}"
+            def salvar_json_exportado(json_texto: str):
+                caminhos = []
+                pasta_base = os.path.dirname(caminho_csv_trabalho) or os.getcwd()
+                if pasta_base:
+                    caminhos.append(pasta_base)
+                caminhos.extend([
+                    os.path.join(os.path.expanduser("~"), ".saberdochao"),
+                    tempfile.gettempdir(),
+                    os.getcwd(),
+                ])
+
+                for pasta in caminhos:
+                    try:
+                        os.makedirs(pasta, exist_ok=True)
+                        caminho_arquivo = os.path.join(pasta, "saberes_compartilhados.json")
+                        with open(caminho_arquivo, "w", encoding="utf-8") as f:
+                            f.write(json_texto)
+                        return caminho_arquivo
+                    except Exception:
+                        continue
+                return None
+
+            def compartilhar_dados(e):
+                dados_exportacao = coletar_dados_exportacao()
+                json_texto = json.dumps(dados_exportacao, ensure_ascii=False, indent=4)
+                caminho_arquivo = salvar_json_exportado(json_texto)
+
+                if caminho_arquivo:
+                    aviso = f"✓ Arquivo salvo em: {caminho_arquivo}\n{len(dados_exportacao['canteiros'])} canteiro(s) exportados."
+                else:
+                    aviso = "⚠ Não foi possível salvar o arquivo automaticamente. Você pode copiar o conteúdo abaixo."
 
                 def fechar(ev=None):
                     painel_json.visible = False
                     page.update()
 
-                # 4. Interface limpa, usando a área de transferência universal nativa
+                def copiar_codigo(ev=None):
+                    try:
+                        page.set_clipboard(json_texto)
+                        page.snack_bar = ft.SnackBar(ft.Text("JSON copiado para a área de transferência"))
+                    except Exception as erro:
+                        page.snack_bar = ft.SnackBar(ft.Text(f"Não foi possível copiar automaticamente: {erro}"))
+                    page.snack_bar.open = True
+                    page.update()
+
                 painel_json.content = ft.Column(
                     controls=[
                         ft.Text("JSON Exportado", size=18, weight=ft.FontWeight.BOLD),
@@ -118,7 +147,7 @@ try:
                             color=ft.Colors.GREY_600,
                         ),
                         ft.Row([
-                            ft.TextButton("Copiar Código", icon=ft.Icons.COPY, on_click=lambda _: page.set_clipboard(json_texto)),
+                            ft.TextButton("Copiar Código", icon=ft.Icons.COPY, on_click=copiar_codigo),
                             ft.TextButton("Fechar", on_click=fechar),
                         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
                     ]
@@ -132,10 +161,13 @@ try:
                 plantas_novas = dados.get("plantas_usuario", [])
                 nomes_existentes = set()
                 try:
-                    with open(caminho_csv_trabalho, mode='r', encoding='utf-8') as arquivo:
-                        for linha in csv.DictReader(arquivo, delimiter=';'):
-                            if linha.get('Nome da Planta'):
-                                nomes_existentes.add(linha['Nome da Planta'].strip().lower())
+                    with open(caminho_csv_trabalho, mode='r', encoding='utf-8-sig', newline='') as arquivo:
+                        reader = csv.DictReader(arquivo, delimiter=';')
+                        for linha in reader:
+                            normalized = {str(k).strip().lstrip('\ufeff'): (v if v is not None else "") for k, v in linha.items() if k is not None}
+                            nome = normalized.get('Nome da Planta', '')
+                            if nome:
+                                nomes_existentes.add(nome.strip().lower())
                 except FileNotFoundError:
                     pass
 
@@ -143,7 +175,6 @@ try:
                 for p in plantas_novas:
                     nome_planta = p.get('Nome da Planta', '').strip()
                     if nome_planta and nome_planta.lower() not in nomes_existentes:
-                        # Substitua a linha_csv antiga por esta:
                         linha_csv = f"{nome_planta};{p.get('Tipo','')};{p.get('Nome Popular 1','')};{p.get('Nome Popular 2','')};{p.get('Nome Popular 3','')};{p.get('Tempo de Colheita (Em Dias)','')};{p.get('Frequência de Rega (Em Dias)','')};{p.get('Quantidade de Sol','')};{p.get('Planta que Cresce Bem Junto 1','')};{p.get('Planta que Cresce Bem Junto 2','')};{p.get('Planta que Cresce Bem Junto 3','')};{p.get('Planta que Cresce Mal Junto 1','')};{p.get('Planta que Cresce Mal Junto 2','')};{p.get('Planta que Cresce Mal Junto 3','')};{p.get('Fonte 1', p.get('Fonte', 'Usuário'))};;\n"
                         novas_linhas.append(linha_csv)
 
@@ -155,7 +186,7 @@ try:
                     except Exception:
                         pass
 
-                    container_lista_saberes.content = gerar_lista_saberes(page, painel_info)
+                    refresh_saberes()
 
                 canteiros_novos = dados.get("canteiros", [])
                 if not canteiros_novos:
@@ -462,8 +493,16 @@ try:
                 content=ft.Text(""),
             )
 
+            def refresh_saberes():
+                container_lista_saberes.content = gerar_lista_saberes(
+                    page,
+                    painel_info,
+                    on_planta_alterada=refresh_saberes,
+                )
+                page.update()
+
             container_lista_saberes = ft.Container(
-                content=gerar_lista_saberes(page, painel_info),
+                content=gerar_lista_saberes(page, painel_info, on_planta_alterada=refresh_saberes),
                 expand=True
             )
 
@@ -482,10 +521,13 @@ try:
             def abrir_form_planta(e):
                 nomes_existentes = []
                 try:
-                    with open(caminho_csv_trabalho, mode='r', encoding='utf-8') as arquivo:
-                        for linha in csv.DictReader(arquivo, delimiter=';'):
-                            if linha and linha.get('Nome da Planta'):
-                                nomes_existentes.append(linha['Nome da Planta'].strip())
+                    with open(caminho_csv_trabalho, mode='r', encoding='utf-8-sig', newline='') as arquivo:
+                        reader = csv.DictReader(arquivo, delimiter=';')
+                        for linha in reader:
+                            normalized = {str(k).strip().lstrip('\ufeff'): (v if v is not None else "") for k, v in linha.items() if k is not None}
+                            nome = normalized.get('Nome da Planta', '').strip()
+                            if nome:
+                                nomes_existentes.append(nome)
                 except FileNotFoundError:
                     pass
 
@@ -499,11 +541,11 @@ try:
                         ft.dropdown.Option("Religiosidades"),
                         ft.dropdown.Option("Ornamentais"),
                         ft.dropdown.Option("Agroflorestais"),
-                        ft.dropdown.Option("Outros")
+                        ft.dropdown.Option("Outras")
                     ]
                 )
                 campo_pop = ft.TextField(label="Nomes Populares (separados por vírgula)", dense=True)
-                campo_colheita = ft.TextField(label="Tempo de Colheita (Dias) *", dense=True, input_filter=ft.NumbersOnlyInputFilter())
+                campo_colheita = ft.TextField(label="Tempo de Colheita (Dias) / Período de Frutificação (Mês - Mês)*", dense=True, input_filter=ft.NumbersOnlyInputFilter())
                 campo_rega = ft.TextField(label="Frequência de Rega (Dias) *", dense=True, input_filter=ft.NumbersOnlyInputFilter())
                 campo_quant_sol = ft.Dropdown(
                     label="Quantidade de Sol",
@@ -577,8 +619,7 @@ try:
                         except Exception:
                             pass
 
-                    container_lista_saberes.content = gerar_lista_saberes(page, painel_info)
-                    page.update()
+                    refresh_saberes()
 
                 painel_form.content = ft.Column(
                     controls=[
@@ -688,21 +729,20 @@ try:
                     
                     encontrou = False
                     try:
-                        with open(caminho_csv_trabalho, mode='r', encoding='utf-8') as arquivo:
-                            for linha in csv.DictReader(arquivo, delimiter=';'):
-                                if not linha or not linha.get('Nome da Planta'):
+                        with open(caminho_csv_trabalho, mode='r', encoding='utf-8-sig', newline='') as arquivo:
+                            reader = csv.DictReader(arquivo, delimiter=';')
+                            for linha in reader:
+                                if not linha:
                                     continue
-                                    
-                                nome_planta = str(linha.get('Nome da Planta', '')).strip()
-                                
-                                pops = [str(linha.get(f'Nome Popular {i}', '')).strip() for i in range(1, 4) if str(linha.get(f'Nome Popular {i}', '')).strip() != ""]
-                                
+                                normalized = {str(k).strip().lstrip('\ufeff'): (v if v is not None else "") for k, v in linha.items() if k is not None}
+                                if not normalized.get('Nome da Planta'):
+                                    continue
+                                nome_planta = str(normalized.get('Nome da Planta', '')).strip()
+                                pops = [str(normalized.get(f'Nome Popular {i}', '')).strip() for i in range(1, 4) if str(normalized.get(f'Nome Popular {i}', '')).strip() != ""]
                                 texto_busca = (nome_planta + " " + " ".join(pops)).lower()
-                                
                                 if termo in texto_busca:
                                     encontrou = True
-                                    dados = dict(linha)
-                                    
+                                    dados = normalized
                                     def fazer_clique(d):
                                         return lambda ev: abrir_info_planta(page, painel_info, d)
 
@@ -832,7 +872,6 @@ try:
     ft.app(target=main)
 
 except Exception as erro_global:
-    # O Escudo Supremo: Se falhar nos imports, mostra o erro na tela!
     erro_trace = traceback.format_exc()
     def error_main(page: ft.Page):
         page.scroll = "auto"
