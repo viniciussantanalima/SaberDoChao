@@ -57,3 +57,6 @@ RODRIGUES, Vanda Gorete Souza; GONZAGA, Dorila Silva de Oliveira M. **Arruda**: 
 
 ### SILVA, 2017
 SILVA, Ilvya Amanda Franco da. **Potencial alelopático de extrato aquoso de caule de babaçu sobre germinação e desenvolvimento de sementes de melancieira**. 2017. 43 f. Trabalho de Conclusão de Curso (Bacharelado em Agronomia) - Centro de Ciências Agrárias e Ambientais, Universidade Federal do Maranhão, Chapadinha, 2017.
+
+### SILVA, G. O. da et al., 2024
+SILVA, G. O. da; CARVALHO, A. D. F. de; LOPES, C. A.; BORTOLETTO, A. C.; AZEVEDO, F. Q.; EMYGDIO, B. M.; PEREIRA, A. da S.; FELDBERG, N. P. Desempenho de clones de batata em plantio de outono em região subtropical. Brasília, DF: Embrapa Hortaliças, 2024. Folheto. (Embrapa Hortaliças. Boletim de pesquisa e desenvolvimento, 269). Disponível em: http://www.infoteca.cnptia.embrapa.br/infoteca/handle/doc/1168682. Acesso em: 15 jul. 2026.
